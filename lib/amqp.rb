@@ -41,7 +41,10 @@ module AMQP
       :logging => false,
 
       # ssl
-      :ssl => false
+      :ssl => false,
+      
+      # clustered server address list
+      :clusters => nil
     }
   end
 
@@ -63,6 +66,10 @@ module AMQP
   # * :logging => true | false (default false)
   # Toggle the extremely verbose logging of all protocol communications
   # between the client and the server. Extremely useful for debugging.
+  # * :clusters => Array (default nil)
+  # The list of clustered brokers to be reconnected at the failover time.
+  # Hostname and port pairs can be specified.
+  # i.e. [{:host=>'host1'}, {:host=>'host2', :port=>5673}]
   #
   #  AMQP.start do
   #    # default is to connect to localhost:5672

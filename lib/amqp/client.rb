@@ -1,3 +1,4 @@
+require 'socket'
 require 'amqp/frame'
 
 module AMQP
@@ -33,6 +34,9 @@ module AMQP
                                               :insist => @settings[:insist])
 
         when Protocol::Connection::OpenOk
+          if @settings[:use_known_hosts] && @known_hosts.nil?
+            @known_hosts = method.known_hosts.split(',').map{|i| Hash[*[:host, :port].zip(i.split(':')).flatten] }
+          end
           succeed(self)
 
         when Protocol::Connection::Close
@@ -68,6 +72,7 @@ module AMQP
       errback{ @on_disconnect.call } unless @reconnecting
 
       @connected = false
+      @current_peer = nil
     end
 
     def connection_completed
@@ -77,10 +82,15 @@ module AMQP
       unless @closing
         @on_disconnect = method(:disconnected)
         @reconnecting = false
+        @trybrokers = nil
       end
 
       @connected = true
       @connection_status.call(:connected) if @connection_status
+      @current_peer = begin
+                        port, ip = ::Socket.unpack_sockaddr_in(get_peername)
+                        {:host=>ip, :port=>port}
+                      end
 
       @buf = Buffer.new
       send_data HEADER
@@ -164,6 +174,11 @@ module AMQP
 
     def reconnect force = false
       if @reconnecting and not force
+        if @trybrokers && @trybrokers.size > 0
+          t = @trybrokers.shift
+          @settings[:host] = t[:host]
+          @settings[:port] = t[:port]
+        end
         # wait 1 second after first reconnect attempt, in between each subsequent attempt
         EM.add_timer(1){ reconnect(true) }
         return
@@ -172,6 +187,20 @@ module AMQP
       unless @reconnecting
         @reconnecting = true
 
+        if @settings[:clusters] || @known_hosts
+          @trybrokers = ([@known_hosts].flatten + [@settings[:clusters]].flatten).reject{|i| 
+            i.nil?
+          }.map { |i|
+            {:host=>IPSocket.getaddress(i[:host]), :port=>(i[:port] || AMQP::PORT).to_i}
+          }
+
+          @trybrokers.delete_if { |i| i == @current_peer } if @current_peer
+          t = @trybrokers.shift
+          
+          @settings[:host] = t[:host]
+          @settings[:port] = t[:port]
+        end
+        
         @deferred_status = nil
         initialize(@settings)
 
@@ -180,7 +209,7 @@ module AMQP
         mqs.each{ |_,mq| mq.reset } if mqs
       end
 
-      log 'reconnecting'
+      log "reconnecting: #{@settings[:host]}:#{@settings[:port]}"
       EM.reconnect @settings[:host], @settings[:port], self
     end
 
